@@ -112,35 +112,78 @@
         }
 
         .language-switcher {
-            display: flex;
-            gap: 8px;
-            background: #f5f5f0;
-            padding: 4px;
-            border-radius: 40px;
-            border: 1px solid var(--border-color-gray);
-            flex-shrink: 0;
+            position: relative;
+            display: inline-block;
         }
 
-        .lang-option {
-            padding: 8px 20px;
+        .lang-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
             font-size: 15px;
             font-weight: 600;
-            border: none;
-            border-radius: 32px;
+            border: 1px solid var(--border-color-gray);
+            border-radius: 4px;
             cursor: pointer;
-            background: transparent;
+            background: var(--panel-background);
             color: var(--text-color-base);
             transition: all 0.2s ease;
         }
 
-            .lang-option.active {
-                background: var(--btn-black-background);
-                color: white;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            .lang-toggle:hover {
+                background: var(--hover-item-background);
             }
 
-            .lang-option:hover:not(.active) {
-                background: #e9e9e2;
+            .lang-toggle::after {
+                content: '▼';
+                font-size: 10px;
+                transition: transform 0.2s ease;
+            }
+
+        .language-switcher.open .lang-toggle::after {
+            transform: rotate(180deg);
+        }
+
+        .lang-menu {
+            position: absolute;
+            top: calc(100% + 5px);
+            right: 0;
+            background: var(--panel-background);
+            border: 1px solid var(--border-color-gray);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            display: none;
+            flex-direction: column;
+            min-width: 100px;
+            z-index: 100;
+            overflow: hidden;
+        }
+
+        .language-switcher.open .lang-menu {
+            display: flex;
+        }
+
+        .lang-option {
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            border: none;
+            background: transparent;
+            color: var(--text-color-base);
+            cursor: pointer;
+            text-align: left;
+            width: 100%;
+            transition: background 0.2s ease;
+        }
+
+            .lang-option:hover {
+                background: var(--hover-item-background);
+            }
+
+            .lang-option.active {
+                background: var(--btn-black-background);
+                color: #fff;
             }
 
         .btn {
@@ -601,11 +644,6 @@
                 margin-bottom: 10px;
             }
 
-            .language-switcher .lang-option {
-                padding: 6px 14px;
-                font-size: 13px;
-            }
-
             .btn--filter {
                 display: flex;
             }
@@ -705,6 +743,17 @@
             .table-container .item-price {
                 white-space: normal;
             }
+
+            .mobile-product-list {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 12px;
+                padding: 12px;
+            }
+
+            .mobile-product-card .item-title {
+                word-break: break-word;
+            }
         }
 
         @media (min-width: 769px) {
@@ -716,6 +765,13 @@
     </style>
 </head>
 <body>
+    <div style="display: none;" id="hiddenContactsTemplate">
+        <div id="headerContacts" class="header-contacts">
+            <div class="contact-pretext" data-i18n="contactPretext">по питання купівлі звоніть за тепефоном:</div>
+            <a id="contactPhone" class="contact-phone" href=""></a>
+            <div id="contactName" class="contact-name"></div>
+        </div>
+    </div>
     <div id="itemModalOverlay" class="modal-overlay" onclick="closeItemModal()"></div>
     <div id="itemModal" class="item-modal">
         <button class="modal-close-btn" onclick="closeItemModal()">&times;</button>
@@ -725,10 +781,12 @@
             </div>
             <div class="modal-info-col">
                 <h2 id="modalItemTitle" class="modal-item-title"></h2>
+                <div id="modalItemSpecs" class="item-specs" style="margin-top: 15px; border-bottom: 1px solid var(--border-color-gray); padding-bottom: 15px;"></div>
                 <div class="modal-description">
                     <h4 data-i18n="modalDescTitle">Описание товара</h4>
                     <p id="modalItemDescription"></p>
                 </div>
+                <div id="modalContactsContainer" class="header-contacts" style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border-color-gray);"></div>
             </div>
         </div>
     </div>
@@ -737,16 +795,14 @@
             <div class="header">
                 <div class="header-left">
                     <img id="headerLogo" class="header-logo" src="" alt="Logo" style="display: none;">
-                    <div id="headerContacts" class="header-contacts">
-                        <div class="contact-pretext" data-i18n="contactPretext">по питання купівлі звоніть за тепефоном:</div>
-                        <a id="contactPhone" class="contact-phone" href=""></a>
-                        <div id="contactName" class="contact-name"></div>
-                    </div>
                 </div>
                 <div class="header-right">
-                    <div class="language-switcher">
-                        <button class="lang-option active" data-lang="ru">RU</button>
-                        <button class="lang-option" data-lang="en">EN</button>
+                    <div class="language-switcher" id="languageSwitcher">
+                        <button class="lang-toggle" id="langToggle">RU</button>
+                        <div class="lang-menu" id="langMenu">
+                            <button class="lang-option active" data-lang="ru">RU</button>
+                            <button class="lang-option" data-lang="en">EN</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -851,11 +907,8 @@
         let totalPages = 1;
         let sortState = { column: 'Code', order: 'asc' };
         let lastMobileState = null;
-        const API_BASE = (() => {
-            const userConfig = localStorage.getItem('api_base_url');
-            if (userConfig) return userConfig;
-            return window.location.origin;
-        })();
+        const userConfig = localStorage.getItem('api_base_url');
+        const API_BASE = userConfig ? userConfig : window.location.origin;
         function t(key) {
             return translations[currentLang] && translations[currentLang][key] ? translations[currentLang][key] : key;
         }
@@ -872,6 +925,7 @@
             document.getElementById('modalFullPhoto').src = API_BASE + '/photos/placeholder.png';
             document.getElementById('modalItemTitle').textContent = t('loadingTitle');
             document.getElementById('modalItemDescription').textContent = t('loadingDesc');
+            document.getElementById('modalItemSpecs').innerHTML = '';
             document.getElementById('itemModalOverlay').classList.add('active');
             document.getElementById('itemModal').classList.add('active');
             document.body.style.overflow = 'hidden';
@@ -881,6 +935,8 @@
                     const item = await dataResp.json();
                     document.getElementById('modalItemTitle').textContent = escapeHtml(item.NAME || t('loadingTitle'));
                     document.getElementById('modalItemDescription').textContent = escapeHtml(item.Description || t('defaultDescription'));
+                    document.getElementById('modalItemSpecs').innerHTML = `<div style="margin-bottom: 5px;"><strong>${t('codeLabel')}</strong> ${escapeHtml(item.Code || '')}</div><div style="margin-bottom: 5px;"><strong>${t('brandLabel')}</strong> ${escapeHtml(item.Brand || '')}</div><div style="margin-bottom: 5px;"><strong>${t('modelLabel')}</strong> ${escapeHtml(item.Model || '')}</div><div style="margin-bottom: 5px;"><strong>${t('conditionLabel')}</strong> ${escapeHtml(item.Conditions || '')}</div><div style="margin-bottom: 5px;"><strong>${t('autoLabel')}</strong> ${escapeHtml(item.Truck_models || '')}</div>`;
+                    document.getElementById('modalContactsContainer').innerHTML = document.getElementById('headerContacts').innerHTML;
                     if (item.photo_urls && item.photo_urls.length > 0) {
                         document.getElementById('modalFullPhoto').src = API_BASE + `/item?record_id=${recordId}&size=0`;
                     }
@@ -955,25 +1011,7 @@
                                     if (cleaned.startsWith('http://') || cleaned.startsWith('https://') || cleaned.startsWith('/')) photoSrc = cleaned;
                                 }
                             }
-                            html += `<tr>
-                                                        <td class="col-photo">
-                                                            <img src="${photoSrc}" alt="" class="item-photo" loading="lazy">
-                                                         </td>
-                                                        <td class="col-info">
-                                                            <div class="item-title">${escapeHtml(row.NAME || '')}</div>
-                                                            <div class="item-specs">
-                                                                <strong>${t('codeLabel')}</strong> ${escapeHtml(row.Code || '')} <span class="bullet">•</span>
-                                                                <strong>${t('brandLabel')}</strong> ${escapeHtml(row.Brand || '')} <span class="bullet">•</span>
-                                                                <strong>${t('modelLabel')}</strong> ${escapeHtml(row.Model || '')} <span class="bullet">•</span>
-                                                                <strong>${t('conditionLabel')}</strong> ${escapeHtml(row.Conditions || '')} <span class="bullet">•</span>
-                                                                <strong>${t('autoLabel')}</strong> ${escapeHtml(row.Truck_models || '')}
-                                                            </div>
-                                                         </td>
-                                                        <td class="col-action">
-                                                            <div class="item-price">${escapeHtml(row.Price ? row.Price.toString() : '0')} ${t('priceEuro')}</div>
-                                                            <button class="btn btn--black btn--small" onclick="openItemModal(${row.id})">${t('detailsBtn')}</button>
-                                                         </td>
-                                                    </tr>`;
+                            html += `<tr><td class="col-photo"><img src="${photoSrc}" alt="" class="item-photo" loading="lazy"></td><td class="col-info"><div class="item-title">${escapeHtml(row.NAME || '')}</div><div class="item-specs"><strong>${t('codeLabel')}</strong> ${escapeHtml(row.Code || '')} <span class="bullet">•</span><strong>${t('brandLabel')}</strong> ${escapeHtml(row.Brand || '')} <span class="bullet">•</span><strong>${t('modelLabel')}</strong> ${escapeHtml(row.Model || '')} <span class="bullet">•</span><strong>${t('conditionLabel')}</strong> ${escapeHtml(row.Conditions || '')} <span class="bullet">•</span><strong>${t('autoLabel')}</strong> ${escapeHtml(row.Truck_models || '')}</div></td><td class="col-action"><div class="item-price">${escapeHtml(row.Price ? row.Price.toString() : '0')} ${t('priceEuro')}</div><button class="btn btn--black btn--small" onclick="openItemModal(${row.id})">${t('detailsBtn')}</button></td></tr>`;
                         }
                         document.getElementById('tableBody').innerHTML = html;
                     } else {
@@ -988,21 +1026,7 @@
                                     if (cleaned.startsWith('http://') || cleaned.startsWith('https://') || cleaned.startsWith('/')) photoSrc = cleaned;
                                 }
                             }
-                            cardsHtml += `
-                                                <div class="mobile-product-card">
-                                                    <img src="${photoSrc}" alt="" class="item-photo" loading="lazy">
-                                                    <div class="item-title">${escapeHtml(row.NAME || '')}</div>
-                                                    <div class="item-specs">
-                                                        <strong>${t('codeLabel')}</strong> ${escapeHtml(row.Code || '')} <span class="bullet">•</span>
-                                                        <strong>${t('brandLabel')}</strong> ${escapeHtml(row.Brand || '')} <span class="bullet">•</span>
-                                                        <strong>${t('modelLabel')}</strong> ${escapeHtml(row.Model || '')} <span class="bullet">•</span>
-                                                        <strong>${t('conditionLabel')}</strong> ${escapeHtml(row.Conditions || '')} <span class="bullet">•</span>
-                                                        <strong>${t('autoLabel')}</strong> ${escapeHtml(row.Truck_models || '')}
-                                                    </div>
-                                                    <div class="item-price">${escapeHtml(row.Price ? row.Price.toString() : '0')} ${t('priceEuro')}</div>
-                                                    <button class="btn btn--black btn--small" onclick="openItemModal(${row.id})">${t('detailsBtn')}</button>
-                                                </div>
-                                            `;
+                            cardsHtml += `<div class="mobile-product-card"><img src="${photoSrc}" alt="" class="item-photo" loading="lazy"><div class="item-title">${escapeHtml(row.NAME || '')}</div><div class="item-specs"><strong>${t('codeLabel')}</strong> ${escapeHtml(row.Code || '')} <span class="bullet">•</span><strong>${t('brandLabel')}</strong> ${escapeHtml(row.Brand || '')} <span class="bullet">•</span><strong>${t('modelLabel')}</strong> ${escapeHtml(row.Model || '')} <span class="bullet">•</span><strong>${t('conditionLabel')}</strong> ${escapeHtml(row.Conditions || '')} <span class="bullet">•</span><strong>${t('autoLabel')}</strong> ${escapeHtml(row.Truck_models || '')}</div><div class="item-price">${escapeHtml(row.Price ? row.Price.toString() : '0')} ${t('priceEuro')}</div><button class="btn btn--black btn--small" onclick="openItemModal(${row.id})">${t('detailsBtn')}</button></div>`;
                         }
                         cardsHtml += '</div>';
                         container.innerHTML = cardsHtml;
@@ -1045,12 +1069,8 @@
                 }
                 const logoImg = document.getElementById('headerLogo');
                 logoImg.src = API_BASE + '/logo';
-                logoImg.onload = () => {
-                    logoImg.style.display = 'block';
-                };
-                logoImg.onerror = () => {
-                    logoImg.style.display = 'none';
-                };
+                logoImg.onload = () => { logoImg.style.display = 'block'; };
+                logoImg.onerror = () => { logoImg.style.display = 'none'; };
             } catch (e) { }
             try {
                 const contactsResp = await fetch(API_BASE + '/contacts');
@@ -1081,22 +1101,10 @@
                             const num = parseInt(priceMaxVal);
                             if (!isNaN(num)) priceMaxNum = num;
                         }
-                        currentFilters = {
-                            code: document.getElementById('filterCode').value || null,
-                            name: document.getElementById('filterName').value || null,
-                            brand: document.getElementById('filterBrand').value || null,
-                            model: document.getElementById('filterModel').value || null,
-                            price_min: priceMinNum,
-                            price_max: priceMaxNum,
-                            condition: document.getElementById('filterCondition').value || null,
-                            sort_by: sortState.column,
-                            sort_order: sortState.order
-                        };
+                        currentFilters = { code: document.getElementById('filterCode').value || null, name: document.getElementById('filterName').value || null, brand: document.getElementById('filterBrand').value || null, model: document.getElementById('filterModel').value || null, price_min: priceMinNum, price_max: priceMaxNum, condition: document.getElementById('filterCondition').value || null, sort_by: sortState.column, sort_order: sortState.order };
                         currentPage = 1;
                         loadData();
-                        if (window.innerWidth <= 768) {
-                            document.getElementById('filtersSidebar').classList.remove('show');
-                        }
+                        if (window.innerWidth <= 768) document.getElementById('filtersSidebar').classList.remove('show');
                     }
                 });
             });
@@ -1113,22 +1121,10 @@
                     const num = parseInt(priceMaxVal);
                     if (!isNaN(num)) priceMaxNum = num;
                 }
-                currentFilters = {
-                    code: document.getElementById('filterCode').value || null,
-                    name: document.getElementById('filterName').value || null,
-                    brand: document.getElementById('filterBrand').value || null,
-                    model: document.getElementById('filterModel').value || null,
-                    price_min: priceMinNum,
-                    price_max: priceMaxNum,
-                    condition: document.getElementById('filterCondition').value || null,
-                    sort_by: sortState.column,
-                    sort_order: sortState.order
-                };
+                currentFilters = { code: document.getElementById('filterCode').value || null, name: document.getElementById('filterName').value || null, brand: document.getElementById('filterBrand').value || null, model: document.getElementById('filterModel').value || null, price_min: priceMinNum, price_max: priceMaxNum, condition: document.getElementById('filterCondition').value || null, sort_by: sortState.column, sort_order: sortState.order };
                 currentPage = 1;
                 loadData();
-                if (window.innerWidth <= 768) {
-                    document.getElementById('filtersSidebar').classList.remove('show');
-                }
+                if (window.innerWidth <= 768) document.getElementById('filtersSidebar').classList.remove('show');
             };
             document.getElementById('resetFiltersBtn').onclick = () => {
                 ['filterCode', 'filterName', 'filterBrand', 'filterModel', 'filterPriceMin', 'filterPriceMax', 'filterCondition'].forEach(id => {
@@ -1138,9 +1134,7 @@
                 currentFilters = {};
                 currentPage = 1;
                 loadData();
-                if (window.innerWidth <= 768) {
-                    document.getElementById('filtersSidebar').classList.remove('show');
-                }
+                if (window.innerWidth <= 768) document.getElementById('filtersSidebar').classList.remove('show');
             };
             try {
                 const response = await fetch(API_BASE + '/healthcheck');
@@ -1151,22 +1145,52 @@
             document.querySelectorAll('[data-i18n]').forEach(el => {
                 const key = el.getAttribute('data-i18n');
                 if (key && translations[currentLang][key]) {
-                    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-                        el.placeholder = translations[currentLang][key];
-                    } else {
-                        el.textContent = translations[currentLang][key];
-                    }
+                    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.placeholder = translations[currentLang][key];
+                    else el.textContent = translations[currentLang][key];
                 }
             });
             document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
                 const key = el.getAttribute('data-i18n-placeholder');
-                if (key && translations[currentLang][key]) {
-                    el.placeholder = translations[currentLang][key];
-                }
+                if (key && translations[currentLang][key]) el.placeholder = translations[currentLang][key];
             });
             document.documentElement.lang = currentLang === 'ru' ? 'ru' : 'en';
-            document.querySelectorAll('.lang-option').forEach(btn => {
+            const switcher = document.getElementById('languageSwitcher');
+            const toggleBtn = document.getElementById('langToggle');
+            const options = document.querySelectorAll('.lang-option');
+            toggleBtn.textContent = currentLang.toUpperCase();
+            options.forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.lang === currentLang);
+            });
+            toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                switcher.classList.toggle('open');
+            });
+            document.addEventListener('click', (e) => {
+                if (!switcher.contains(e.target)) switcher.classList.remove('open');
+            });
+            options.forEach(btn => {
+                btn.onclick = () => {
+                    currentLang = btn.dataset.lang;
+                    localStorage.setItem('appLang', currentLang);
+                    toggleBtn.textContent = currentLang.toUpperCase();
+                    document.querySelectorAll('[data-i18n]').forEach(el => {
+                        const key = el.getAttribute('data-i18n');
+                        if (key && translations[currentLang][key]) {
+                            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.placeholder = translations[currentLang][key];
+                            else el.textContent = translations[currentLang][key];
+                        }
+                    });
+                    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                        const key = el.getAttribute('data-i18n-placeholder');
+                        if (key && translations[currentLang][key]) el.placeholder = translations[currentLang][key];
+                    });
+                    document.documentElement.lang = currentLang === 'ru' ? 'ru' : 'en';
+                    options.forEach(innerBtn => {
+                        innerBtn.classList.toggle('active', innerBtn.dataset.lang === currentLang);
+                    });
+                    switcher.classList.remove('open');
+                    loadData();
+                };
             });
             loadData();
             document.addEventListener('keydown', (e) => {
@@ -1180,33 +1204,6 @@
                     lastMobileState = nowMobile;
                     loadData();
                 }
-            });
-            document.querySelectorAll('.lang-option').forEach(btn => {
-                btn.onclick = () => {
-                    currentLang = btn.dataset.lang;
-                    localStorage.setItem('appLang', currentLang);
-                    document.querySelectorAll('[data-i18n]').forEach(el => {
-                        const key = el.getAttribute('data-i18n');
-                        if (key && translations[currentLang][key]) {
-                            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-                                el.placeholder = translations[currentLang][key];
-                            } else {
-                                el.textContent = translations[currentLang][key];
-                            }
-                        }
-                    });
-                    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-                        const key = el.getAttribute('data-i18n-placeholder');
-                        if (key && translations[currentLang][key]) {
-                            el.placeholder = translations[currentLang][key];
-                        }
-                    });
-                    document.documentElement.lang = currentLang === 'ru' ? 'ru' : 'en';
-                    document.querySelectorAll('.lang-option').forEach(innerBtn => {
-                        innerBtn.classList.toggle('active', innerBtn.dataset.lang === currentLang);
-                    });
-                    loadData();
-                };
             });
         });
     </script>
