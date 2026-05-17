@@ -42,8 +42,6 @@ rate_limit_storage = defaultdict(list)
 restore_lock = asyncio.Lock()
 RATE_LIMIT_REQUESTS = 100
 RATE_LIMIT_PERIOD = 60
-LOG_FILE_PATH = os.path.join(os.path.dirname(__file__), "logs", "app.log")
-os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
 
 def get_all_existing_ids(conn):
     cursor = conn.cursor()
@@ -63,33 +61,6 @@ def log_admin_action(admin: dict, endpoint: str, request_data: str, response_dat
         conn.close()
     except Exception as e:
         print(f"[ERROR] Failed to write log: {str(e)}")
-
-async def cleanup_dead_websocket_connections():
-    global active_connections
-    alive_connections = []
-    for conn in active_connections:
-        try:
-            await conn.send_json({"ping": True})
-            alive_connections.append(conn)
-        except:
-            pass
-    active_connections = alive_connections
-
-async def notify_progress(status_val: str, progress: int, message: str, current_operation: str):
-    global progress_status
-    progress_status = {
-        "status": status_val,
-        "progress": progress,
-        "message": message,
-        "current_operation": current_operation,
-        "timestamp": datetime.now().isoformat()
-    }
-    await cleanup_dead_websocket_connections()
-    for connection in active_connections:
-        try:
-            await connection.send_json(progress_status)
-        except:
-            pass
 
 class CellUpdateRequest(BaseModel):
     record_id: int
@@ -174,6 +145,21 @@ class AddUnpublishedItemRequest(BaseModel):
 class ContactUpdate(BaseModel):
     phone: str
     name: str
+
+async def notify_progress(status_val: str, progress: int, message: str, current_operation: str):
+    global progress_status
+    progress_status = {
+        "status": status_val,
+        "progress": progress,
+        "message": message,
+        "current_operation": current_operation,
+        "timestamp": datetime.now().isoformat()
+    }
+    for connection in active_connections:
+        try:
+            await connection.send_json(progress_status)
+        except:
+            pass
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -331,23 +317,29 @@ async def lifespan(app: FastAPI):
                 print(f"[ERROR] Could not delete {fpath}: {str(e)}")
     conn_cleanup = sqlite3.connect(DB_PATH)
     cursor_cleanup = conn_cleanup.cursor()
-    for table in ['tbl_1_pub', 'tbl_2_unpub', 'tbl_3_buffer']:
-        cursor_cleanup.execute(f"SELECT Photos FROM {table}")
-        for row in cursor_cleanup.fetchall():
-            if row[0]:
-                for p in row[0].split(','):
-                    if p.strip():
-                        db_photos = set()
-                        db_photos.add(p.strip())
+    cursor_cleanup.execute("SELECT Photos FROM tbl_1_pub")
+    pub_photos = cursor_cleanup.fetchall()
+    cursor_cleanup.execute("SELECT Photos FROM tbl_2_unpub")
+    unpub_photos = cursor_cleanup.fetchall()
+    cursor_cleanup.execute("SELECT Photos FROM tbl_3_buffer")
+    buffer_photos = cursor_cleanup.fetchall()
     conn_cleanup.close()
     db_photos = set()
-    for table in ['tbl_1_pub', 'tbl_2_unpub', 'tbl_3_buffer']:
-        cursor_cleanup.execute(f"SELECT Photos FROM {table}")
-        for row in cursor_cleanup.fetchall():
-            if row[0]:
-                for p in row[0].split(','):
-                    if p.strip():
-                        db_photos.add(p.strip())
+    for row in pub_photos:
+        if row[0]:
+            for p in row[0].split(','):
+                if p.strip():
+                    db_photos.add(p.strip())
+    for row in unpub_photos:
+        if row[0]:
+            for p in row[0].split(','):
+                if p.strip():
+                    db_photos.add(p.strip())
+    for row in buffer_photos:
+        if row[0]:
+            for p in row[0].split(','):
+                if p.strip():
+                    db_photos.add(p.strip())
     for f in os.listdir(PHOTOS_DIR):
         fpath = os.path.join(PHOTOS_DIR, f)
         if os.path.isfile(fpath) and f != "no_photo.png":
@@ -429,7 +421,7 @@ async def body_size_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def maintenance_middleware(request: Request, call_next):
-    if config.get('MAINTENANCE_MODE') and request.url.path not in ['/maintenance', '/admin/maintenance-off', '/admin/backup/restore', '/admin/backup/create', '/admin/backup/restore-auto', '/ws/progress', '/progress-status', '/data/filter', '/healthcheck', '/pages-count', '/data', '/photos', '/item', '/admin/logs', '/admin/admins-list', '/login', '/token', '/admin/logs-file']:
+    if config.get('MAINTENANCE_MODE') and request.url.path not in ['/maintenance', '/admin/maintenance-off', '/admin/backup/restore', '/admin/backup/create', '/admin/backup/restore-auto', '/ws/progress', '/progress-status', '/data/filter', '/healthcheck', '/pages-count', '/data', '/photos', '/item', '/admin/logs', '/admin/admins-list', '/login', '/token']:
         return RedirectResponse(url="/maintenance", status_code=303)
     response = await call_next(request)
     return response
@@ -523,8 +515,7 @@ async def websocket_progress(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+        active_connections.remove(websocket)
     except Exception as e:
         if websocket in active_connections:
             active_connections.remove(websocket)
@@ -816,7 +807,7 @@ async def login_for_access_token(response: Response, form_data: OAuth2PasswordRe
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,
+        secure=False, 
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
@@ -1011,44 +1002,6 @@ async def restore_auto_backup_endpoint(target_tables: str = Form(default="all"),
             raise HTTPException(status_code=500, detail=str(e))
         finally:
             config.set_maintenance(False)
-
-@app.get("/admin/logs-file")
-async def get_logs_file(current_admin: dict = Depends(get_current_super_admin)):
-    print(f"[INFO] Attempt to read log file by admin: {current_admin['username']}")
-    if not os.path.exists(LOG_FILE_PATH):
-        print(f"[WARN] Log file not found at {LOG_FILE_PATH}")
-        return JSONResponse(content={"logs": "", "message": "Log file not found"})
-    try:
-        with open(LOG_FILE_PATH, 'r', encoding='utf-8') as f:
-            log_content = f.read()
-        print(f"[INFO] Log file read successfully, size: {len(log_content)} bytes")
-        response_data = {"logs": log_content, "message": "Log file retrieved successfully"}
-        log_admin_action(current_admin, "/admin/logs-file", "", "Log file retrieved")
-        return JSONResponse(content=response_data)
-    except Exception as e:
-        print(f"[ERROR] Failed to read log file: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error reading log file: {str(e)}")
-
-@app.post("/admin/logs-file")
-async def write_logs_file(request: Request, current_admin: dict = Depends(get_current_super_admin)):
-    print(f"[INFO] Attempt to write to log file by admin: {current_admin['username']}")
-    try:
-        body = await request.json()
-        log_content = body.get('logs', '')
-        if not isinstance(log_content, str):
-            raise HTTPException(status_code=400, detail="logs field must be a string")
-        with open(LOG_FILE_PATH, 'w', encoding='utf-8') as f:
-            f.write(log_content)
-        print(f"[INFO] Log file written successfully, size: {len(log_content)} bytes")
-        response_data = {"message": "Log file saved successfully"}
-        log_admin_action(current_admin, "/admin/logs-file", f"Content length: {len(log_content)}", str(response_data))
-        return JSONResponse(content=response_data)
-    except json.JSONDecodeError:
-        print(f"[ERROR] Invalid JSON in request")
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-    except Exception as e:
-        print(f"[ERROR] Failed to write log file: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error writing log file: {str(e)}")
 
 @app.get("/sierra-alpha")
 async def sierra_alpha_page():
