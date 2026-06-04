@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from helpers import logger, config
+from helpers import logger, config, LOG_FILE_PATH
 import hashlib
 import secrets
 from jose import JWTError, jwt
@@ -146,6 +146,17 @@ class ContactUpdate(BaseModel):
     phone: str
     name: str
 
+async def cleanup_dead_websocket_connections():
+    dead_connections = []
+    for connection in active_connections:
+        try:
+            await connection.send_json({"type": "ping"})
+        except:
+            dead_connections.append(connection)
+    for dead in dead_connections:
+        if dead in active_connections:
+            active_connections.remove(dead)
+
 async def notify_progress(status_val: str, progress: int, message: str, current_operation: str):
     global progress_status
     progress_status = {
@@ -155,6 +166,7 @@ async def notify_progress(status_val: str, progress: int, message: str, current_
         "current_operation": current_operation,
         "timestamp": datetime.now().isoformat()
     }
+    await cleanup_dead_websocket_connections()
     for connection in active_connections:
         try:
             await connection.send_json(progress_status)
@@ -164,6 +176,11 @@ async def notify_progress(status_val: str, progress: int, message: str, current_
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[INFO] Starting FastAPI server")
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    os.makedirs(PHOTOS_DIR, exist_ok=True)
+    os.makedirs("templates", exist_ok=True)
+    os.makedirs("static", exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='db_version'")
@@ -421,7 +438,7 @@ async def body_size_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def maintenance_middleware(request: Request, call_next):
-    if config.get('MAINTENANCE_MODE') and request.url.path not in ['/maintenance', '/admin/maintenance-off', '/admin/backup/restore', '/admin/backup/create', '/admin/backup/restore-auto', '/ws/progress', '/progress-status', '/data/filter', '/healthcheck', '/pages-count', '/data', '/photos', '/item', '/admin/logs', '/admin/admins-list', '/login', '/token']:
+    if config.get('MAINTENANCE_MODE') and request.url.path not in ['/maintenance', '/admin/maintenance-off', '/admin/backup/restore', '/admin/backup/create', '/admin/backup/restore-auto', '/ws/progress', '/progress-status', '/data/filter', '/healthcheck', '/pages-count', '/data', '/photos', '/item', '/admin/logs', '/admin/admins-list', '/login', '/token', '/admin/logs/view']:
         return RedirectResponse(url="/maintenance", status_code=303)
     response = await call_next(request)
     return response
@@ -515,7 +532,8 @@ async def websocket_progress(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        active_connections.remove(websocket)
+        if websocket in active_connections:
+            active_connections.remove(websocket)
     except Exception as e:
         if websocket in active_connections:
             active_connections.remove(websocket)
@@ -731,6 +749,22 @@ async def healthcheck():
 async def get_progress_status(current_user: dict = Depends(get_current_admin)):
     return progress_status
 
+@app.get("/admin/logs/view")
+async def view_admin_logs(code: str):
+    if not code or code != ADMIN_STATIC_CODE:
+        print(f"[ERROR] Invalid admin code provided for logs access")
+        raise HTTPException(status_code=401, detail="Invalid admin code")
+    try:
+        if not os.path.exists(LOG_FILE_PATH):
+            return JSONResponse(content={"logs": "", "message": "Log file not found"})
+        with open(LOG_FILE_PATH, "r", encoding="utf-8") as f:
+            log_content = f.read()
+        print(f"[INFO] Admin logs accessed successfully")
+        return JSONResponse(content={"logs": log_content})
+    except Exception as e:
+        print(f"[ERROR] Failed to read log file: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to read log file")
+
 @app.get("/login")
 async def login_page():
     print("[INFO] Login page request")
@@ -807,7 +841,7 @@ async def login_for_access_token(response: Response, form_data: OAuth2PasswordRe
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False, 
+        secure=False,
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
