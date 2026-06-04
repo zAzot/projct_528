@@ -1,4 +1,8 @@
 import os
+import sys
+import logging
+import multiprocessing
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -11,23 +15,40 @@ class LogCapture:
         return cls._instance
     
     def _init_logger(self):
-        self.log_dir = "logs"
-        os.makedirs(self.log_dir, exist_ok=True)
-        now = datetime.now()
-        filename = now.strftime("%S-%M-%H-%d-%m-%Y.log")
-        self.log_file = os.path.join(self.log_dir, filename)
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        
+        self.logger = logging.getLogger("project_527")
+        self.logger.setLevel(logging.INFO)
+        
+        if multiprocessing.current_process().name == 'MainProcess':
+            try:
+                file_handler = RotatingFileHandler(
+                    'logs/app.log', 
+                    maxBytes=10*1024*1024, 
+                    backupCount=5, 
+                    encoding='utf-8'
+                )
+                console_handler = logging.StreamHandler(sys.stdout)
+                
+                formatter = logging.Formatter('%(asctime)s   [%(levelname)s]   %(message)s')
+                file_handler.setFormatter(formatter)
+                console_handler.setFormatter(formatter)
+                
+                self.logger.addHandler(file_handler)
+                self.logger.addHandler(console_handler)
+            except Exception:
+                pass
     
     def log(self, message, level="INFO"):
-        prefixes = {"INFO": "[INFO]  ", "ERROR": "[ERROR] ", "REQW": "[REQW]  ", "WARN": "[WARN]  "}
-        prefix = prefixes.get(level, f"[{level}] ")
-        formatted = f"{prefix}{message}"
-        print(formatted)
-        try:
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                f.write(f"{timestamp} {formatted}\n")
-        except Exception:
-            pass
+        if level == "ERROR":
+            log_level = logging.ERROR
+        elif level == "WARN":
+            log_level = logging.WARNING
+        else:
+            log_level = logging.INFO
+        
+        self.logger.log(log_level, message)
 
 logger = LogCapture()
 
